@@ -1,0 +1,262 @@
+---
+title: "Airbnb Data Analysis"
+author: "Luying Cao"
+date: "2017/11/16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(dplyr)
+library(ggmap)
+library(wordcloud)
+library(RColorBrewer)
+library(reshape2)
+library(tidytext)
+library(merTools)
+```
+
+#Introduction
+As an online hospitality service that allows people to lease or rent short-term house properties, including apartments, beds, homestays, etc, Airbnb acts as a bellwether in the industry and is growing rapidly. The reason why I choose the dataset of Boston is because I have been living in the Boston area for more than seven years and I personally had several wonderful Airbnb experiences in Boston. There are some aspects about Airbnb that I am really curious about, including:
+
+•	What are the most important factors that might influence the prices of properties in Boston?
+
+•	Which room type has the highest average score of overall satisfaction? What about highest average price?
+
+•	Which neighborhood has the highest average score of overall satisfaction? What about highest average price?
+
+•	When people are dissatisfied with their living experiences, what words do they use most often?
+
+•	When people are satisfied with their living experiences, what aspects do they care most?
+
+
+#Data Import
+After carefully studying the dataset, I select the room_id, survey_id, host_id, room_type, city, neighborhood, reviews, overall_satisfaction, accommodates, bedrooms, price, name, last_modified, latitude, longitude, and location to be the factors that I am going to take into account for this Airbnb data analysis.
+
+```{r, warning=FALSE}
+data17_01 <- read.csv("tomslee_airbnb_boston_0779_2017-01-14.csv")
+data17_02 <- read.csv("tomslee_airbnb_boston_0858_2017-02-16.csv")
+data17_03 <- read.csv("tomslee_airbnb_boston_0931_2017-03-12.csv")
+data17_04 <- read.csv("tomslee_airbnb_boston_1043_2017-04-08.csv")
+data17_05 <- read.csv("tomslee_airbnb_boston_1187_2017-05-05.csv")
+data17_06 <- read.csv("tomslee_airbnb_boston_1309_2017-06-10.csv")
+data17_07 <- read.csv("tomslee_airbnb_boston_1429_2017-07-10.csv")
+data17_1234 <- rbind(data17_01, data17_02, data17_03, data17_04)
+data17_1234 <- data17_1234[, -c(4,11,14)] #delete empty and useless columns
+data17_567 <- rbind(data17_05, data17_06, data17_07)
+data17_567 <- data17_567[, -c(2,5,6,7,13,15,16,17,20)] #delete empty and useless columns
+data17 <- rbind(data17_1234, data17_567)
+
+#export data
+write.csv(data17, file = "boston_data17.csv")
+
+colnames(data17)
+
+data17$latitude <- as.numeric(data17$latitude)
+data17$longitude <- as.numeric(data17$longitude)
+```
+
+#Exploratory Data Analysis
+```{r}
+#Calculate the average score of overall satisfaction by room_type
+meansatisf<- data17 %>% 
+  group_by(room_type) %>% 
+  summarise(meansatisf = mean(overall_satisfaction))
+meansatisf
+
+ggplot(data = na.omit(meansatisf), mapping = aes(x = room_type, y = meansatisf, fill = room_type, rotate = 90)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  ggtitle("Mean scores of overall satisfaction by room type")
+
+#Calculate the average price by room_type
+meanprice<- data17 %>% 
+  group_by(room_type) %>% 
+  summarise(meanprice = mean(price))
+meanprice
+
+ggplot(data = na.omit(meanprice), mapping = aes(x = room_type, y = meanprice, fill = room_type, rotate = 90)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  ggtitle("Mean prices by room type")
+```
+
+Among the three room types, "private room" appears to have the highest mean score of overall satisfaction of 3.00 and "shared room" appears to have the lowest mean score of overall satisfaction, which is 2.83. What falls in between is "entire home/apt", which is only a little bit behind "private room" and the score is 2.99. In addition, "entire home/apt" has the highest average prices of $217.20 and "shared room" has the lowest average prices of $65.97, this happens because the "entire home/apt" has much larger usable area than "shared room" does. From this chart, I can predict that people who travel to Boston favor and are most satisfied by private rooms and are least satisfied by shared rooms. However, the overall satisfaction scores for private rooms or entire home/apt are really similar Thus, I will examine the data deeper to find out why these happen.
+
+
+
+```{r}
+#Calculate the average score of overall satisfaction by neighborhood
+meansatisf1<- data17 %>% 
+  group_by(neighborhood) %>% 
+  summarise(meansatisf1 = mean(overall_satisfaction))
+meansatisf1
+
+ggplot(data = na.omit(meansatisf1), mapping = aes(x = neighborhood, y = meansatisf1, fill = neighborhood, rotate = 90)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme(axis.text.x=element_text(angle=90,hjust=1)) +
+  ggtitle("Mean scores of overall satisfaction by neighborhood")
+
+#Calculate the average price by neighborhood
+meanprice1<- data17 %>% 
+  group_by(neighborhood) %>% 
+  summarise(meanprice1 = mean(price))
+meanprice1
+summary(meanprice1)
+
+ggplot(data = na.omit(meanprice1), mapping = aes(x = neighborhood, y = meanprice1, fill = neighborhood, rotate = 90)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme(axis.text.x=element_text(angle=90,hjust=1)) +
+  ggtitle("Mean prices by neighborhood")
+```
+
+Based on the information above, West End has the lowest mean score of overall satisfaction while Hyde Park has the highest. At the same time, Hyde Park has the lowest average price and South Boston Waterfront has the highest average price. Due to the condition of Hyde Park, it is reasonable for me to infer that the lower prices of properties most often would lead to higher scores of overall satisfaction, however, higher prices of properties do not necessarily lead to lower scores of overall satisfaction.
+
+
+#Fitting Models
+Through fitting several multilevel models for the dataset and the priciple of "lower AIC implies better model", I have found out that it is more reasonable to keep the "neighborhood" predictor and "bedrooms" predictor. Then, with the plot of random effects, it can be seen that there are outliers that needs to be accounted for.
+
+```{r, warning=FALSE}
+#multilevel model
+m1 <- lmer(data = data17, price ~ overall_satisfaction + accommodates + reviews + reviews*room_type + (1|room_type))
+m2 <- lmer(data = data17, price ~ overall_satisfaction + accommodates + reviews + reviews*neighborhood + (1|neighborhood))
+AIC(m1,m2)
+
+#keeping predictor "neighborhood", adding predictor "bedrooms"
+m3 <- lmer(data = data17, price ~ overall_satisfaction + accommodates + reviews + bedrooms + reviews*neighborhood + (1|neighborhood))
+AIC(m1,m2,m3)
+
+#keeping "bedrooms"
+m4 <- lmer(data = data17, price ~ overall_satisfaction + accommodates + reviews + bedrooms*neighborhood + reviews*neighborhood + (1|neighborhood))
+
+AIC(m1,m2,m3,m4) #choose model m4 with AIC of 374498.5
+
+coef(m4)
+plot(data17$overall_satisfaction, data17$price) +
+  title("Relationship between overall satisfaction scores and prices")
+
+plot(m4,ylim=c(-300,300))
+
+#random effects
+plotFEsim(FEsim(m4))
+```
+
+
+
+
+Now I would like to look at the relationship between the scores of overall satisfaction and locations of the properties. First, I would like to divide these scores into three categories, including low satsifaction group with scores from 0 to 2.5, medium satisfaction group with scores from 3 to 4, and high satisfaction group with scores of 4.5 or 5.
+```{r}
+# get the high rating points on the Boston map, see where they locate
+unique(data17$overall_satisfaction) #find out what the levels are
+
+#low satisfaction group
+low_satisf <- data17 %>% 
+    filter(overall_satisfaction == 0.0 & 0.5 & 1.0 & 1.5 & 2.0 & 2.5)
+#medium satisfaction group
+med_satisf <- data17 %>% 
+    filter(overall_satisfaction == 3.0 & 3.5 & 4.0)
+#high satisfaction group
+high_satisf <- data17 %>% 
+    filter(overall_satisfaction == 4.5 & 5.0)
+
+nrow(low_satisf)
+nrow(med_satisf)
+nrow(high_satisf)
+
+map <- get_map(location="boston", source="google", zoom = 12)
+ggmap(map, extent = "device") + 
+  geom_point(data = low_satisf, aes(x = longitude, y = latitude), alpha = 0.5, colour = "red", size = 1) +
+  geom_point(data = med_satisf, aes(x = longitude, y = latitude), alpha = 0.5, colour = "brown", size = 1) +
+  geom_point(data = high_satisf, aes(x = longitude, y = latitude), alpha = 0.5, colour = "pink", size = 1)
+
+```
+Next, I make a map showing Boston area with points from the three groups created above. From the map, it can be found out that most of the Airbnb properties receive a score in the low satisfaction group or high satisfaction group, and only a few of them get scores from medium satisfaction group. It can then be inferred that people choosing to live in Airbnb in Boston are either very satisfied or not satisfied at all with their living experiences. The question is: what aspects make people feel most satisfied with and what aspects make people dissatisfied with? I will use wordclouds to find out the answer to this question.
+
+
+#Wordclouds: What are the most frequent words people used in the reviews?
+Then, I import the file that contains people's reviews of those properties, which would be interesting to see what words people use most to describe their exepriences at Airbnb.
+```{r}
+reviews <- read.csv("reviews.csv")
+reviews <- reviews[, -c(1,2,3,4,5)]
+reviews <- data.frame(reviews)
+reviews$housingid <- c(1:nrow(reviews))
+reviews <- data.frame(lapply(reviews, as.character), stringsAsFactors=FALSE)
+
+reviews_text <- melt(data = reviews, id.vars = "housingid")
+reviews_text <- data_frame(line = reviews_text$housingid, text = reviews_text$value)
+reviews_text <- reviews_text %>%
+  unnest_tokens(word, text)
+
+data(stop_words)
+
+reviews_text <- reviews_text %>%
+  anti_join(stop_words) 
+
+reviews_text %>%
+  dplyr::count(word, sort = TRUE) 
+
+nrcjoy <- get_sentiments("nrc") %>% 
+  filter(sentiment == "joy")
+
+reviews_text_sentiment_stat <- reviews_text %>%
+  inner_join(nrcjoy) %>%
+  dplyr::count(word, sort = TRUE)
+
+reviews_text$line <- as.numeric(reviews_text$line)
+
+bing_word_counts <- reviews_text %>%
+  inner_join(get_sentiments("bing")) %>%
+  dplyr::count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+bing_word_counts
+
+bing_word_counts %>%
+  group_by(sentiment) %>%
+  top_n(10) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(y = "Contribution to sentiment",
+       x = NULL) +
+  coord_flip()
+```
+
+
+```{r}
+reviews_text %>%
+  anti_join(stop_words) %>%
+  dplyr::count(word) %>%
+  with(wordcloud(word, n, max.words = 100))
+
+reviews_text %>%
+  inner_join(get_sentiments("bing")) %>%
+  dplyr::count(word, sentiment, sort = TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("#F8766D", "#00BFC4"),
+                   max.words = 100,scale = c(2,.5),title.size=1.5)
+```
+
+From the sentiment chart and the wordcloud above, I can find out that when people are dissatisfied about their Airbnb experiences, the aspects which they are getting annoyed include noise, temperature, and what they get from the hosts. At the same time, people who score really high about their Airbnb living experiences care more about the cleaniness, quietness, environment, degree of comfort, and whether their hosts are nice and helpful.
+
+
+
+#Conclusion
+In general, Airbnb properties in Boston receive relatively high scores of overall satisfaction from people. There are things that I can improve for the report, such as getting more data from different years and generate more models to compare. From the previous analyases, the factors that influence the price of properties the most include the room type and neighborhood. Also, lower prices generally would lead to higher satisfaction scores. Last but not least, in order for hosts in Boston area to improve their satisfaction rating scores, they can pay more attention to the level of help and support they are able to provide and make the living environment more clean and comfortable.
+
+
+
+
+
+
+
+
+
+
+
+
+
